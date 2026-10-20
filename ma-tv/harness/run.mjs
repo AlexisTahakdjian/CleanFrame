@@ -139,6 +139,7 @@ const SCENES = [
   ['reglages', async p => { await p.evaluate("ShoreQA.scene('settings')"); }],
   ['apparence', async p => { await p.evaluate("ShoreQA.scene('appearance')"); }],
   ['editeur', async p => { await p.evaluate("ShoreQA.scene('editor')"); await p.waitFor('ShoreQA.state().catalog.loaded'); }],
+  ['langue-et-heure', async p => { await p.evaluate("ShoreQA.scene('settings')"); await settle(p); await p.evaluate("ShoreQA.activate('settings.group.locale')"); }],
 ];
 
 async function sceneSweep(engine) {
@@ -151,6 +152,13 @@ async function sceneSweep(engine) {
       await setup(page); await page.waitFor('ShoreQA.ready()', 15000); await settle(page, 600);
       const geo = await page.evaluate(GEOMETRY);
       report.geometry[engineName][name] = geo;
+      if ((LOCALCFG.locale || {}).lang === 'fr') {
+        // Texte anglais resté visible (nouveau texte de l'auteur non traduit) : signalé, sans bloquer.
+        const english = await page.evaluate(`(function(){var w=document.createTreeWalker(document.getElementById('stage'),4,null,false),n,o=[];
+          while((n=w.nextNode())){var s=n.nodeValue.trim();if(s&&n.parentNode.getClientRects().length&&/\\b(the|and|is|to|of|your|this|Home|Back|Settings|Choose|Open|Loading|Remove|Add|Undo|Done|Try)\\b/.test(s))o.push(s);}return o;}())`);
+        const known = new Set([...PRIMARY, ...EXTRA].map(a => a.name));
+        english.filter(s => !known.has(s)).forEach(s => report.warnings.push({ engine: engineName, scenario, text: 'texte non traduit ? « ' + s + ' »' }));
+      }
       check('un seul focus visible', geo.where && geo.where.focusCount === 1, geo.where);
       check('aucune erreur', page.errors.length === 0, page.errors);
       if (SHOTS) {
@@ -304,6 +312,47 @@ const FLOWS = [
     check('reprise (retour d\'une autre app / veille) : focus et accueil intacts', w.view === 'home' && w.focusCount === 1, w);
     await press(p, 'right');
     check('première touche après reprise traitée', (await where(p)).focusCount === 1);
+    check('aucune erreur', p.errors.length === 0, p.errors);
+    await p.close();
+  }],
+  ['langue-et-heure', async engine => {
+    const p = await openApp(engine);
+    const clock = () => p.evaluate("(document.querySelector('#caption .clock') || {}).textContent || ''");
+    const texts = () => p.evaluate("(function(){var w=document.createTreeWalker(document.getElementById('stage'),4,null,false),n,o=[];while((n=w.nextNode())){var s=n.nodeValue.trim();if(s&&n.parentNode.getClientRects().length)o.push(s);}return o;}())");
+    const ENGLISH = ['All apps', 'Settings', 'Background', 'Layout', 'Typography', 'Apps on Home', 'Back', 'Undo', 'Done', 'Leave Home?', 'Stay'];
+    const prefs = LOCALCFG.locale || {};
+    check('heure par défaut au format ' + (prefs.clock || '24h'), prefs.clock === '12h' ? /^\d{1,2}:\d{2}$/.test(await clock()) : /^\d{2}:\d{2}$/.test(await clock()), await clock());
+    if (prefs.lang === 'fr') {
+      let shown = await texts();
+      check('accueil en français (« Toutes les applis », « Réglages »)', shown.includes('Toutes les applis') && shown.includes('Réglages'), shown.slice(0, 12));
+      await p.evaluate("ShoreQA.scene('settings')"); await settle(p);
+      shown = await texts();
+      check('Réglages en français, sans libellé anglais connu', shown.includes('Langue et heure') && !shown.some(s => ENGLISH.includes(s)), shown);
+    }
+    // Changement par le menu : Réglages → Langue et heure → English, 12 h.
+    await p.evaluate("ShoreQA.scene('settings')"); await settle(p);
+    check('groupe « Langue et heure » présent', !!(await p.evaluate("ShoreQA.activate('settings.group.locale')")));
+    await settle(p);
+    await p.evaluate("ShoreQA.activate('ma-tv.lang.en')"); await settle(p, 300);
+    await p.evaluate("ShoreQA.activate('ma-tv.clock.12h')"); await settle(p, 300);
+    const ticks = await p.evaluate("Array.prototype.map.call(document.querySelectorAll('#stage .setting-choice.is-applied'), function (e) { return e.getAttribute('data-action'); })");
+    check('choix appliqués cochés (English, 12 h)', ticks.includes('ma-tv.lang.en') && ticks.includes('ma-tv.clock.12h'), ticks);
+    await p.evaluate("ShoreQA.scene('home')"); await settle(p);
+    let shown = await texts();
+    check('retour à l\'anglais : « All apps », « Settings »', shown.includes('All apps') && shown.includes('Settings'), shown.slice(0, 12));
+    const c12 = await clock();
+    check('heure au format 12 h', /^\d{1,2}:\d{2}$/.test(c12) && Number(c12.split(':')[0]) >= 1 && Number(c12.split(':')[0]) <= 12, c12);
+    await p.send('Page.reload', { ignoreCache: true }); await p.waitFor('window.__readyAt > 0', 30000); await settle(p);
+    shown = await texts();
+    check('langue et heure conservées après relance', shown.includes('All apps') && /^\d{1,2}:\d{2}$/.test(await clock()), [shown.slice(0, 6), await clock()]);
+    // Retour aux réglages par défaut, en français.
+    await p.evaluate("ShoreQA.scene('settings')"); await settle(p);
+    await p.evaluate("ShoreQA.activate('settings.group.locale')"); await settle(p);
+    await p.evaluate("ShoreQA.activate('ma-tv.lang.fr')"); await settle(p, 300);
+    await p.evaluate("ShoreQA.activate('ma-tv.clock.24h')"); await settle(p, 300);
+    await p.evaluate("ShoreQA.scene('home')"); await settle(p);
+    shown = await texts();
+    check('retour au français', shown.includes('Toutes les applis') && /^\d{2}:\d{2}$/.test(await clock()), [shown.slice(0, 6), await clock()]);
     check('aucune erreur', p.errors.length === 0, p.errors);
     await p.close();
   }],

@@ -101,7 +101,7 @@ JS_BLOCKERS = [
 NETWORK = re.compile(r'\bfetch\s*\(|XMLHttpRequest|\bWebSocket\s*\(|EventSource\s*\(|sendBeacon\s*\(|importScripts\s*\(|<access\b|allow-navigation|content-security-policy')
 INDEX_ANCHOR = '<script src="device.js"></script>'
 INJECT = ('<!-- ma-tv : réglages locaux et compatibilité Tizen 6.0 (injectés au build) -->\n'
-          '<script src="ma-tv-config.js"></script>\n<script src="ma-tv-gap.js"></script>\n<script src="compat-tizen6.js"></script>\n')
+          '<script src="ma-tv-config.js"></script>\n<script src="ma-tv-locale.js"></script>\n<script src="ma-tv-gap.js"></script>\n<script src="compat-tizen6.js"></script>\n')
 
 
 def runtime_source(name):
@@ -462,6 +462,10 @@ def _build(required_version=None, check_only=False, quiet=False):
     index = (STAGE / 'index.html').read_text()
     if index.count(INDEX_ANCHOR) != 1:
         raise Stop('index.html de l\'auteur a changé (ancre « ' + INDEX_ANCHOR + ' » introuvable). Adapter ma-tv/build.py.')
+    css_anchor = '<link rel="stylesheet" href="style.css">'
+    if index.count(css_anchor) != 1:
+        raise Stop('index.html de l\'auteur a changé (ancre « ' + css_anchor + ' » introuvable). Adapter ma-tv/build.py.')
+    index = index.replace(css_anchor, css_anchor + '\n<link rel="stylesheet" href="ma-tv.css"><!-- ma-tv -->')
     (STAGE / 'index.html').write_text(index.replace(INDEX_ANCHOR, INJECT + INDEX_ANCHOR))
     (STAGE / 'config.xml').write_text(overlay_config(source_config, cfg, ident, required_version))
     for notice in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):

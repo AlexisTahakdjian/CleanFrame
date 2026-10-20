@@ -256,6 +256,7 @@
     return (a.ascent - a.descent - a.cap - b.ascent + b.descent + b.cap) / 2;
   }
   function textWidth(text, size, weight, spacing, role) {
+    text = window.CleanFrameMaTv ? CleanFrameMaTv.t(text) : text; // ma-tv : mesurer le texte tel qu'affiché (langue choisie)
     var id = homeFont(), r = fontRole(id, role || 'ui', size), key, width;
     if (id !== 'manrope') { weight = r.weight; spacing = role === 'display' ? -size * .01 : 0; }
     key = [id, role || 'ui', text, size, weight, spacing].join('|');
@@ -829,7 +830,8 @@
       { id: 'typography', label: 'Typography', value: FONTS[S.c.font].name },
       { id: 'focus', label: 'Focus', value: VALUE_NAMES[S.c.focus] + (materialApplies() ? ', ' + VALUE_NAMES[S.c.material] : '') },
       { id: 'editor', label: 'Apps on Home', value: n + (n === 1 ? ' app' : ' apps') },
-      { id: 'samsung', label: 'Samsung', value: 'Home and TV settings' }];
+      { id: 'samsung', label: 'Samsung', value: 'Home and TV settings' }]
+      .concat(window.CleanFrameMaTv ? CleanFrameMaTv.settingsRows() : []); // ma-tv : groupe « Langue et heure »
   }
   function settingsIds() { return settingsRows().map(function (r) { return r.id; }); }
   V.settings = {
@@ -850,6 +852,7 @@
     else openAppearance(id);
   }
   var DETAIL_NAMES = { background: 'Background', layout: 'Layout', typography: 'Typography', focus: 'Focus', rotation: 'Rotation', samsung: 'Samsung' };
+  DETAIL_NAMES.locale = 'Language and time'; // ma-tv
   function choice(axis, value, disabled) {
     return { action: axis === 'mode' ? 'rotation.' + value : 'choice.' + axis + '.' + value, axis: axis, value: value, disabled: !!disabled,
       label: axis === 'font' ? FONTS[value].name : axis === 'mode' ? MODES.filter(function (m) { return m.id === value; })[0].name : value === 'both' ? 'Both' : VALUE_NAMES[value] };
@@ -857,6 +860,7 @@
   function detailSections(t) {
     var flat = S.c.bg !== 'photo', inactive = !materialApplies();
     function options(axis, values, disabled) { return values.map(function (value) { return choice(axis, value, disabled); }); }
+    if (t.group === 'locale' && window.CleanFrameMaTv) return CleanFrameMaTv.sections(); // ma-tv
     if (t.group === 'background') return [
       { id: 'bg', title: 'Background type', items: options('bg', ['photo', 'light', 'dark']) },
       { id: 'wall', title: 'Wallpaper', items: [{ action: 'background.wallpaper', label: wall(S.c.wall).name, thumbnail: true, disabled: flat }] },
@@ -918,7 +922,8 @@
       if (error && error.patch[error.row] !== undefined) detailFocus(t, choice(error.row, error.patch[error.row]), 0);
       if (error && error.row === 'mode') applyRotation(error.patch.mode);
       else if (error) setLook(error.patch, { row: error.row });
-    } else if (item.axis === 'mode') applyRotation(item.value);
+    } else if (item.axis === 'ma-tv' && window.CleanFrameMaTv) CleanFrameMaTv.ok(item.action); // ma-tv : langue / heure
+    else if (item.axis === 'mode') applyRotation(item.value);
     else if (item.axis) { patch[item.axis] = item.value; setLook(patch, { row: item.axis }); }
     else if (item.action === 'background.wallpaper') openWallpaper();
     else if (item.action === 'background.rotation') openAppearance('rotation');
@@ -1065,6 +1070,8 @@
 
   function clockText() {
     var d = new Date(), h = d.getHours() % 12 || 12, m = d.getMinutes();
+    // ma-tv : format 24 h (« 09:05 », « 21:42 ») si choisi dans Réglages → Langue et heure.
+    if (window.CleanFrameMaTv && CleanFrameMaTv.clock24()) return (d.getHours() < 10 ? '0' : '') + d.getHours() + ':' + (m < 10 ? '0' : '') + m;
     return h + ':' + (m < 10 ? '0' : '') + m;
   }
   function clockHtml() {
@@ -1394,7 +1401,7 @@
     appearanceTitle.textContent = DETAIL_NAMES[t.group];
     var at = detailLocation(t), selected = at.item, error = S.lookError, status = '', hint;
     function command(item, inner, cls) {
-      var applied = item.axis && S.c[item.axis] === item.value;
+      var applied = item.axis && S.c[item.axis] === item.value || !!item.applied; // ma-tv : choix langue / heure
       var loading = !!(item.axis && S.pending && S.pending.target[item.axis] === item.value && S.pending.row === item.axis);
       return '<button type="button" tabindex="-1" class="setting-choice' + (cls ? ' ' + cls : '') + (t.f.action === item.action ? ' is-focus' : '') + (item.disabled ? ' is-disabled' : '') + (applied ? ' is-applied' : '') + (loading ? ' is-loading' : '') + '"'
         + (item.axis ? ' role="radio" aria-checked="' + !!applied + '"' : '') + ' aria-label="' + esc(item.axis && item.value === 'both' ? 'Icons and text' : item.label) + '" aria-disabled="' + !!item.disabled + '" aria-busy="' + loading + '"'

@@ -23,6 +23,8 @@ window.CleanFrameLocal = {
   // Accueil au premier lancement (9 au plus ; ensuite, l'ordre se règle à la télécommande et est conservé).
   defaultHome: ['youtube', 'netflix', 'kIciSQlYEM.plex', 'aLlph042JZ.arte', 'QY16tZ64E3.francetv', 'appletv',
     'Jz7aUrV2Q4.Twitch', 'yu1NM3vHsU.DAZN', 'RffagId0eC.SfrSport'],
+  // Langue et format de l'heure par défaut (modifiables ensuite dans Réglages → Langue et heure).
+  locale: { lang: 'fr', clock: '24h' },
   // Contrôles masqués : Art Mode (org.tizen.art-app existe, mais la TV déclare FrameTVSupport=false).
   hideUtils: ['art'],
   // Écrans Samsung ouverts par « Samsung Home » et « TV settings » (IDs présents sur cette TV).

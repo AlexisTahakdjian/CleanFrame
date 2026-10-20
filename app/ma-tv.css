@@ -1,0 +1,6 @@
+/* ma-tv : styles propres à la TV d'Alexis, chargés après style.css (injectés par ma-tv/build.py).
+   Réglages : avec le groupe « Langue et heure », la liste passe à 7 lignes. L'écran de l'auteur est prévu pour 6 ;
+   à partir de 7 lignes seulement, elles sont resserrées pour ne pas chevaucher l'aide « OK … » en bas. */
+.settings-overview .settings-group:nth-last-child(n+7),
+.settings-overview .settings-group:nth-last-child(n+7) ~ .settings-group{height:96px;padding-top:5px;padding-bottom:5px}
+.settings-overview .settings-group:nth-last-child(n+7) ~ .settings-group{margin-top:6px}
