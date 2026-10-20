@@ -24,10 +24,12 @@
     { id: 'sbs', name: 'SBS On Demand', mark: true, appId: 'OyE7OuxlUi.SBSOnDemand' },
     { id: 'applemusic', name: 'Apple Music', mark: true, appId: 'org.tizen.apple.apple-music' }
   ];
-  // ma-tv : apps par défaut lues sur la TV d'Alexis (app/ma-tv-config.js), à la place du catalogue australien.
+  // ma-tv : apps de marque relevées sur la TV d'Alexis (app/ma-tv-config.js), à la place du catalogue australien.
   var LOCAL = window.CleanFrameLocal || {};
   if (LOCAL.primaryApps && LOCAL.primaryApps.length) PRIMARY_APPS = LOCAL.primaryApps;
-  var PRIMARY =PRIMARY_APPS.map(function (a) { return a.id; }), APPS = PRIMARY_APPS.slice(), ALPHA = [];
+  var PRIMARY = PRIMARY_APPS.map(function (a) { return a.id; }), APPS = PRIMARY_APPS.slice(), ALPHA = [];
+  // ma-tv : autres apps de la TV, avec leur vrai nom dès le démarrage (sans attendre le catalogue).
+  (LOCAL.extraApps || []).forEach(function (a) { APPS.push({ id: a.appId, appId: a.appId, name: a.name, mark: false }); });
   var WALLS = window.CleanFrameWallpapers || [{ id: 'misty', name: 'Misty coast', tone: 'light', ut: { tr: 'mist', br: 'mist' }, frostVeil: .20 }];
   var ADAPTIVE_INK = window.CleanFrameAdaptiveInk || {};
   WALLS.forEach(function (w) { w.ut = w.ut || { tr: 'light', br: 'light' }; w.frostVeil = w.frostVeil || .12; });
@@ -341,7 +343,8 @@
       if (!app(id) && id.indexOf('.') > 0) APPS.push({ id: id, appId: id, name: id.split('.').pop(), mark: false });
       if (app(id)) h.push(id);
     });
-    if (!h.length) h = PRIMARY.slice();
+    // ma-tv : accueil du premier lancement choisi dans la config locale (9 apps au plus).
+    if (!h.length) h = (LOCAL.defaultHome || PRIMARY).filter(function (id) { return !!app(id); }).slice(0, CAP);
     (Array.isArray(s.recent) ? s.recent : []).forEach(function (id) { if (safeId(id) && app(id) && h.indexOf(id) < 0 && recent.indexOf(id) < 0 && recent.length < 5) recent.push(id); });
     return {
       bg: pick(modern.bg, LOOK_VALUES.bg, legacyList ? 'dark' : 'photo'), layout: pick(modern.layout, LOOK_VALUES.layout, legacyList ? 'list' : 'dock'),
@@ -360,7 +363,8 @@
     out.appRecords = [];
     c.home.concat(c.recent).forEach(function (key) {
       var a = app(key);
-      if (a && PRIMARY.indexOf(key) < 0 && !out.appRecords.some(function (r) { return r.id === key; })) out.appRecords.push({ id: a.id, appId: a.appId, name: a.name, brand: a.brand || '', icon: a.icon || '' });
+      // ma-tv : enregistrer aussi les apps de marque, pour qu'un changement de la config locale ne retire aucune tuile.
+      if (a && !out.appRecords.some(function (r) { return r.id === key; })) out.appRecords.push({ id: a.id, appId: a.appId, name: a.name, brand: a.brand || '', icon: a.icon || '' });
     });
     return out;
   }
