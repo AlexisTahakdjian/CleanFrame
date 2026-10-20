@@ -74,11 +74,19 @@
     }
     return false;
   }
+  // Applique tout de suite les modifications en attente (avant une mesure synchrone de l'auteur).
+  function flush() { if (observer) { var records = observer.takeRecords(); if (records.length && relevant(records)) apply(); } }
   function start() {
     // Appliqué dans le même tour que la modification (avant l'affichage) : pas d'image sans espacement.
     observer = new MutationObserver(function (records) { if (relevant(records)) apply(); });
     observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'hidden', 'style'] });
-    window.CleanFrameCompat = { flexGap: 'polyfill', refresh: apply };
+    // L'auteur mesure parfois juste après un innerHTML, avant la microtâche de l'observateur : on vide la file
+    // avant chaque getBoundingClientRect (uniquement sur un moteur sans flex gap, donc sur la TV).
+    var measure = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function () { flush(); return measure.apply(this, arguments); };
+    // Pour les règles CSS générées par ma-tv/build.py (pseudo-éléments, que le JS ne peut pas décaler).
+    document.documentElement.className += ' cf-no-flexgap';
+    window.CleanFrameCompat = { flexGap: 'polyfill', refresh: apply, flush: flush };
     apply();
   }
   if (document.body) start(); else document.addEventListener('DOMContentLoaded', start);
