@@ -24,10 +24,14 @@ page.on('Runtime.consoleAPICalled', p => { if (p.type === 'error' || p.type === 
 page.on('Log.entryAdded', p => { if (p.entry.level === 'error') errors.push({ run, kind: 'log', text: p.entry.text + ' ' + (p.entry.url || '') }); });
 page.on('Network.loadingFailed', p => { if (p.errorText !== 'net::ERR_ABORTED') errors.push({ run, kind: 'chargement', text: p.errorText }); });
 for (const d of ['Runtime', 'Log', 'Network', 'Page']) await page.send(d + '.enable').catch(() => {});
+// Deux instants mesurés dans la page : accueil utilisable (focus visible) et écran complet (photo, polices).
+await page.send('Page.addScriptToEvaluateOnNewDocument', { source: `(function(){ window.__homeAt = 0; window.__readyAt = 0; (function w(){
+  var q = window.ShoreQA; if (q && q.where && !window.__homeAt && q.where().focusCount === 1) window.__homeAt = performance.now();
+  if (q && q.ready && q.ready()) { window.__readyAt = performance.now(); return; } requestAnimationFrame(w); }()); }())` });
 
 const probe = `({ ua: navigator.userAgent, w: innerWidth, h: innerHeight, sw: screen.width, sh: screen.height, dpr: devicePixelRatio,
   gap: window.CleanFrameCompat ? CleanFrameCompat.flexGap : 'natif', fonts: document.fonts ? document.fonts.check('500 32px Manrope') : null,
-  ready: !!(window.ShoreQA && ShoreQA.ready && ShoreQA.ready()), where: window.ShoreQA ? ShoreQA.where() : null,
+  ready: !!window.__readyAt, homeAt: Math.round(window.__homeAt || 0), readyAt: Math.round(window.__readyAt || 0), where: window.ShoreQA ? ShoreQA.where() : null,
   fcp: ((performance.getEntriesByType('paint').filter(function (e) { return e.name === 'first-contentful-paint'; })[0]) || {}).startTime || 0,
   now: performance.now() })`;
 
@@ -40,7 +44,7 @@ for (run = 1; run <= reloads; run++) {
     try { m = await page.evaluate(probe, { timeout: 3000 }); if (m.ready) break; } catch {}
   }
   runs.push({ run, readyAfterReloadMs: Date.now() - t0, pageNowAtReady: m && Math.round(m.now), fcp: m && Math.round(m.fcp), probe: m });
-  console.log(`essai ${run} : écran prêt ≈ ${m && Math.round(m.now)} ms (horloge page), FCP ${m && Math.round(m.fcp)} ms, focus ${m && m.where && m.where.focusCount}`);
+  console.log(`essai ${run} : accueil utilisable ${m && m.homeAt} ms · écran complet (photo) ${m && m.readyAt} ms · FCP ${m && Math.round(m.fcp)} ms (horloge page)`);
   await pause(1500);
 }
 if (withKeys) {

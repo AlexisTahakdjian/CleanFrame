@@ -19,6 +19,10 @@ Actions :
 """
 from pathlib import Path
 import argparse
+import os
+import select
+import signal
+import subprocess
 import json
 import re
 import time
@@ -190,8 +194,23 @@ class TV:
     def debug(self):
         self.connect()
         self.ok('lancement de CleanFrame en mode inspecteur + tunnel DevTools local (sdb forward)')
-        out = self.sdb('shell', '0', 'debug', self.app_id, timeout=120, check=False)
-        match = re.search(r'port\s*:?\s*(\d{2,5})', out, re.I)
+        # Sur cette TV, `shell 0 debug` ne répond pas si l'app tourne déjà : l'arrêter d'abord (comme Samsung Wits).
+        self.sdb('shell', '0', 'was_kill', self.app_id, check=False, timeout=30)
+        # `shell 0 debug` peut rester ouvert après avoir annoncé le port : lecture au fil de l'eau, arrêt dès le port lu.
+        command = [str(lib.sdk_tool(self.cfg, 'sdb')), '-s', self.serial, 'shell', '0', 'debug', self.app_id]
+        log('$ ' + ' '.join(command))
+        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+        out, match, deadline = '', None, time.monotonic() + 90
+        while time.monotonic() < deadline and not match:
+            ready, _, _ = select.select([proc.stdout], [], [], 1)
+            if ready:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                out += line
+                log('  ' + line.rstrip())
+                match = re.search(r'port\s*:?\s*(\d{2,5})', line, re.I)
+        os.killpg(proc.pid, signal.SIGTERM)
         if not match:
             raise Stop('Port d\'inspection non fourni par la TV (sortie ci-dessus). Plan B : ma-tv/docs/plan-b.md.')
         port = match.group(1)
