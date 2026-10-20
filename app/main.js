@@ -24,7 +24,10 @@
     { id: 'sbs', name: 'SBS On Demand', mark: true, appId: 'OyE7OuxlUi.SBSOnDemand' },
     { id: 'applemusic', name: 'Apple Music', mark: true, appId: 'org.tizen.apple.apple-music' }
   ];
-  var PRIMARY = PRIMARY_APPS.map(function (a) { return a.id; }), APPS = PRIMARY_APPS.slice(), ALPHA = [];
+  // ma-tv : apps par défaut lues sur la TV d'Alexis (app/ma-tv-config.js), à la place du catalogue australien.
+  var LOCAL = window.CleanFrameLocal || {};
+  if (LOCAL.primaryApps && LOCAL.primaryApps.length) PRIMARY_APPS = LOCAL.primaryApps;
+  var PRIMARY =PRIMARY_APPS.map(function (a) { return a.id; }), APPS = PRIMARY_APPS.slice(), ALPHA = [];
   var WALLS = window.CleanFrameWallpapers || [{ id: 'misty', name: 'Misty coast', tone: 'light', ut: { tr: 'mist', br: 'mist' }, frostVeil: .20 }];
   var ADAPTIVE_INK = window.CleanFrameAdaptiveInk || {};
   WALLS.forEach(function (w) { w.ut = w.ut || { tr: 'light', br: 'light' }; w.frostVeil = w.frostVeil || .12; });
@@ -491,7 +494,8 @@
   }
 
   /* ---------- Navigation targets ---------- */
-  function utils() { return ['art', 'apps', 'settings']; }
+  // ma-tv : Art Mode n'existe que sur The Frame ; la config locale masque les contrôles absents.
+  function utils() { return ['art', 'apps', 'settings'].filter(function (u) { return (LOCAL.hideUtils || []).indexOf(u) < 0; }); }
   /* prev/next run along the apps; out goes to the controls, inn comes back (or to a per-app action). */
   function axes() {
     var v = S.c.layout === 'list';
@@ -1831,7 +1835,8 @@
     if (code === 9) { ev.preventDefault(); return; }
     if (!k || ev.metaKey || ev.ctrlKey || ev.altKey) return;
     ev.preventDefault();
-    if (k === 'ok' || k === 'back') { if (ev.repeat || heldKeys[code]) return; heldKeys[code] = true; }
+    // ma-tv : un appui « tenu » expire 700 ms après la dernière répétition, au cas où la TV n'envoie pas keyup.
+    if (k === 'ok' || k === 'back') { if (ev.repeat || (heldKeys[code] && Date.now() - heldKeys[code] < 700)) { heldKeys[code] = Date.now(); return; } heldKeys[code] = Date.now(); }
     press(k);
   });
   document.addEventListener('keyup', function (ev) { delete heldKeys[ev.keyCode]; });

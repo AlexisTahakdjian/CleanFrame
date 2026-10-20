@@ -16,6 +16,12 @@
   var INTERNAL = ['adplatform.ADPlayer', 'WykOS4t4F0.cmsWebApp', '25emanual3.emanual',
     'ZODRT12q2l.WebAccountExtension', 'ByJlgt0XeD.CastSettingsApp', 'tv6pbVMQFF.PrivacyChoices'];
   var SELF = 'nClrkHome1.FrameHome';
+  // ma-tv : réglages locaux (app/ma-tv-config.js, injecté au build). Sans eux, rien ne change.
+  var LOCAL = window.CleanFrameLocal || {}, SYSTEM = LOCAL.system || {};
+  if (LOCAL.ids) Object.keys(LOCAL.ids).forEach(function (brand) { IDS[brand] = LOCAL.ids[brand]; });
+  if (LOCAL.selfId) SELF = LOCAL.selfId;
+  // ma-tv : l'identité réelle de l'app installée prime, pour ne jamais se lister soi-même.
+  try { SELF = window.tizen.application.getCurrentApplication().appInfo.id || SELF; } catch (e) {}
   function api() { return window.tizen && window.tizen.application; }
   function unavailable(done) {
     done({ message: 'Open CleanFrame on the TV to use this control.', detail: 'The web preview cannot control the TV.' });
@@ -47,8 +53,15 @@
       api().launchAppControl(control, 'org.tizen.art-app', function () { finish(null); }, function (err) { finish(failure(err)); });
     } catch (err) { finish(failure(err)); }
   }
-  function home(done) { launchApp('com.samsung.tv.csfs', done); }
-  function settings(done) { launchApp('com.samsung.tv.coba.setting', done); }
+  // ma-tv : IDs système configurables (ceux de l'auteur viennent de Tizen 9). 'hide' met CleanFrame
+  // en arrière-plan, ce qui rend la main à l'interface Samsung sans dépendre d'un ID interne.
+  function system(id, done) {
+    if (id !== 'hide') { launchApp(id, done); return; }
+    if (!api()) { unavailable(done); return; }
+    try { api().getCurrentApplication().hide(); done(null); } catch (err) { done(failure(err)); }
+  }
+  function home(done) { system(SYSTEM.home || 'com.samsung.tv.csfs', done); }
+  function settings(done) { system(SYSTEM.settings || 'com.samsung.tv.coba.setting', done); }
   function apps(done) {
     if (!api()) { unavailable(done); return; }
     var finish = bounded(done);
