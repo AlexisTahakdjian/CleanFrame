@@ -20,6 +20,10 @@
   var LOCAL = window.CleanFrameLocal || {}, SYSTEM = LOCAL.system || {};
   if (LOCAL.ids) Object.keys(LOCAL.ids).forEach(function (brand) { IDS[brand] = LOCAL.ids[brand]; });
   if (LOCAL.selfId) SELF = LOCAL.selfId;
+  // ma-tv : apps grand public propres à cette TV (IDs relevés par applist) que les filtres de l'auteur masqueraient.
+  STREAMING = STREAMING.concat(LOCAL.streaming || []);
+  CONSUMER_SYSTEM = CONSUMER_SYSTEM.concat(LOCAL.consumer || []);
+  INTERNAL = INTERNAL.concat(LOCAL.internal || []);
   // ma-tv : l'identité réelle de l'app installée prime, pour ne jamais se lister soi-même.
   try { SELF = window.tizen.application.getCurrentApplication().appInfo.id || SELF; } catch (e) {}
   function api() { return window.tizen && window.tizen.application; }
