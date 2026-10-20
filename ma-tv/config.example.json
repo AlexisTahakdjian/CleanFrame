@@ -1,0 +1,16 @@
+{
+  "_lisezmoi": "Valeurs par défaut versionnées. Copier les valeurs propres à la machine dans .local/ma-tv.json (ignoré par git) : IP, identité, chemins. Les deux fichiers sont fusionnés.",
+  "tv": { "host": "", "port": 26101, "model": "UE43AU7105KXXC", "udn": "" },
+  "mac_ip": "",
+  "identity": { "package": "", "app": "", "name": "CleanFrame", "widget_id": "" },
+  "required_version": "6.0",
+  "api_version": "6.0",
+  "sdk": "~/tizen-studio",
+  "sign": { "profile": "MaTV", "keychain_service": "cleanframe-signing", "author_sha256": "" },
+  "install": { "method": "auto" },
+  "chromium76": ".local/m76/chrome-mac/Chromium.app/Contents/MacOS/Chromium",
+  "chrome_reference": ".local/chrome-ref/chrome-headless-shell-mac-arm64/chrome-headless-shell",
+  "upstream": { "remote": "upstream", "branch": "main" },
+  "fork": { "remote": "origin", "push": true },
+  "local": {}
+}
