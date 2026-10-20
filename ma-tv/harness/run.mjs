@@ -7,6 +7,7 @@ import { createServer } from 'node:http';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 import { launch, key } from './cdp.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -27,15 +28,24 @@ const SELF = (cfg.identity && cfg.identity.app) || 'test.CleanFrame';
 const pause = ms => new Promise(r => setTimeout(r, ms));
 if (!existsSync(join(STAGE, 'index.html'))) { console.error('Construire d\'abord : python3 ma-tv/build.py'); process.exit(2); }
 
-// Catalogue imitant une TV française : les apps par défaut, quelques chaînes, l'app elle-même et des services système.
-const CATALOG = [
-  { id: 'org.tizen.netflix-app', name: 'Netflix' }, { id: '9Ur5IzDKqV.TizenYouTube', name: 'YouTube' },
-  { id: 'org.tizen.primevideo', name: 'Prime Video' }, { id: 'MCmYXNxgcu.DisneyPlus', name: 'Disney+' },
-  { id: 'Ahp5YrtsWm.francetvpluzz', name: 'france.tv' }, { id: 'kIciSQlYEM.tf1', name: 'TF1+' },
-  { id: '3201606009684', name: 'Molotov' }, { id: SELF, name: 'CleanFrame' },
-  { id: 'AbCdEf1234.worker', name: 'Background worker' }, { id: 'org.tizen.browser', name: 'Internet' },
-];
-const SYSTEM = ['com.samsung.tv.csfs', 'com.samsung.tv.coba.setting'];
+// Attentes calculées à partir de la config réellement construite (dist/ma-tv/stage/ma-tv-config.js).
+const built = { window: {} };
+vm.runInNewContext(readFileSync(join(STAGE, 'ma-tv-config.js'), 'utf8'), built);
+const LOCALCFG = built.window.CleanFrameLocal || {};
+const PRIMARY = (LOCALCFG.primaryApps || []).map(a => ({ id: a.id, appId: a.appId, name: a.name }));
+const EXTRA = (LOCALCFG.extraApps || []).map(a => ({ id: a.appId, appId: a.appId, name: a.name }));
+const idOf = key => (PRIMARY.find(a => a.id === key) || EXTRA.find(a => a.id === key) || { appId: key }).appId;
+const HOME = (LOCALCFG.defaultHome || PRIMARY.map(a => a.id)).filter(k => PRIMARY.some(a => a.id === k) || EXTRA.some(a => a.id === k)).slice(0, 9);
+const FIRST = idOf(HOME[0]);
+const SYSCFG = LOCALCFG.system || {};
+const HOME_TARGET = SYSCFG.home || 'com.samsung.tv.csfs';
+// Catalogue imitant cette TV : apps de la config, l'app elle-même et du bruit système que le filtre doit écarter.
+const CATALOG = [...PRIMARY, ...EXTRA].map(a => ({ id: a.appId, name: a.name })).concat([
+  { id: SELF, name: 'CleanFrame' }, { id: 'AbCdEf1234.worker', name: 'Background worker' },
+  { id: 'org.tizen.browser', name: 'Internet' }, { id: 'com.samsung.tv.cobalt-yt', name: 'Youtube' },
+]);
+const SYSTEM = [SYSCFG.home, SYSCFG.settings].filter(id => id && id !== 'hide');
+const UTILS = ['art', 'apps', 'settings'].filter(u => !(LOCALCFG.hideUtils || []).includes(u));
 
 // ---------- Serveur local (boucle locale uniquement) ----------
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml',
@@ -164,7 +174,9 @@ const FLOWS = [
   }],
   ['navigation-accueil', async engine => {
     const p = await openApp(engine);
-    const start = (await state(p)).selected;
+    const first = await state(p);
+    check('accueil du 1er lancement = defaultHome (' + HOME.length + ' apps, dans l\'ordre)', JSON.stringify(first.committed.home) === JSON.stringify(HOME.map(k => PRIMARY.some(a => a.id === k) ? k : idOf(k))), first.committed.home);
+    const start = first.selected;
     await press(p, 'right'); const s1 = await state(p);
     check('Droite change l\'app sélectionnée', s1.selected !== start, [start, s1.selected]);
     await press(p, 'left');
@@ -174,7 +186,7 @@ const FLOWS = [
     await press(p, 'up'); let w = await where(p);
     check('Haut ouvre les contrôles', w.zone === 'util' && w.focusCount === 1, w);
     const actions = await p.evaluate('ShoreQA.actions()');
-    check('Art Mode absent des contrôles', !actions.includes('util.art'), actions);
+    check('contrôles d\'accueil = config (' + UTILS.join(', ') + ')', JSON.stringify(actions.filter(a => a.startsWith('util.'))) === JSON.stringify(UTILS.map(u => 'util.' + u)), actions);
     await press(p, 'right', 'left', 'down'); w = await where(p);
     check('Bas revient aux apps', w.zone === 'apps' && w.focusCount === 1, w);
     await press(p, 'back'); w = await where(p);
@@ -186,7 +198,7 @@ const FLOWS = [
   }],
   ['niveaux-retour', async engine => {
     const p = await openApp(engine);
-    await press(p, 'up', 'right'); // contrôle Settings (Art masqué : All apps, Settings)
+    await press(p, 'up', ...Array(UTILS.indexOf('settings')).fill('right')); // contrôle Settings
     let w = await where(p);
     await press(p, 'ok'); w = await where(p);
     check('OK sur Settings ouvre les réglages', w.view === 'settings', w);
@@ -205,7 +217,7 @@ const FLOWS = [
     await press(p, 'ok'); await pause(200);
     const calls = await tvCalls(p);
     check('OK lance l\'app sélectionnée (tizen.application.launch)', calls.some(c => c.method === 'launch'), calls);
-    check('Netflix par défaut, ID de la config locale', calls[0] && calls[0].id === 'org.tizen.netflix-app', [sel, calls]);
+    check('1re app de l\'accueil configuré (' + FIRST + ')', calls[0] && calls[0].id === FIRST, [sel, calls]);
     check('aucune erreur', p.errors.length === 0, p.errors);
     await p.close();
   }],
@@ -217,7 +229,7 @@ const FLOWS = [
     await p.close();
   }],
   ['app-absente', async engine => {
-    const p = await openApp(engine, { catalog: CATALOG.filter(a => a.id !== 'org.tizen.netflix-app') });
+    const p = await openApp(engine, { catalog: CATALOG.filter(a => a.id !== FIRST) });
     await press(p, 'ok'); await settle(p, 400);
     let w = await where(p);
     check('message propre si l\'app n\'est pas installée', w.view === 'message', w);
@@ -255,7 +267,7 @@ const FLOWS = [
     const p = await openApp(engine);
     await press(p, 'back', 'right', 'ok'); await pause(300);
     const calls = await tvCalls(p);
-    check('« Samsung Home » lance l\'ID système configuré', calls.some(c => c.id === 'com.samsung.tv.csfs'), calls);
+    check('« Samsung Home » ouvre la cible configurée (' + HOME_TARGET + ')', HOME_TARGET === 'hide' ? calls.some(c => c.method === 'hide') : calls.some(c => c.id === HOME_TARGET), calls);
     await p.close();
   }],
   ['sans-api-tizen', async engine => {

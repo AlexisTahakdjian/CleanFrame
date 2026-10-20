@@ -31,13 +31,19 @@ from lib import Stop, log
 
 
 def keychain_password(cfg):
+    """Mot de passe du certificat depuis le Trousseau (None s'il n'y est pas). Lu une fois, avant la signature."""
     service = lib.get(cfg, 'sign.keychain_service', 'cleanframe-signing')
     account = lib.get(cfg, 'sign.profile')
-    result = subprocess.run(['security', 'find-generic-password', '-s', service, '-a', account, '-w'], text=True, capture_output=True)
+    try:
+        result = subprocess.run(['security', 'find-generic-password', '-s', service, '-a', account, '-w'], capture_output=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        raise Stop('Trousseau verrouillé ou demande d\'accès en attente : déverrouiller la session puis relancer.')
     if result.returncode:
-        raise Stop('Le CLI demande le mot de passe du certificat, absent du Trousseau. Une fois : '
-                   'security add-generic-password -s ' + service + ' -a ' + account + ' -w')
-    return result.stdout.strip().encode()
+        return None
+    secret = result.stdout[:-1] if result.stdout.endswith(b'\n') else result.stdout  # garder les espaces éventuels
+    if re.fullmatch(rb'[0-9a-f]+', secret) and len(secret) % 2 == 0 and len(secret) > 16:
+        raise Stop('Mot de passe du Trousseau renvoyé en hexadécimal (caractères non ASCII) : choisir un mot de passe ASCII.')
+    return secret
 
 
 def sdk_package(cfg, unsigned, outdir):
@@ -50,10 +56,11 @@ def sdk_package(cfg, unsigned, outdir):
                    '(Samsung → TV) ou corriger "sign.profile". Voir ma-tv/docs/procedure.md.')
     command = [str(tizen), 'package', '-t', 'wgt', '-s', profile, '-o', str(outdir), '--', str(unsigned)]
     log('$ ' + ' '.join(command))
+    password = keychain_password(cfg)  # avant le lancement : une attente du Trousseau ne mange pas le délai
     pid, terminal = pty.fork()
     if pid == 0:
         os.execv(command[0], command)
-    output, password, answered, refused, deadline = b'', None, 0, 0, time.monotonic() + 180
+    output, answered, refused, deadline = b'', 0, 0, time.monotonic() + 180
     try:
         while time.monotonic() < deadline:
             ready, _, _ = select.select([terminal], [], [], 1)
@@ -68,7 +75,10 @@ def sdk_package(cfg, unsigned, outdir):
             output += chunk
             asked = output.lower().count(b'password:')
             if asked > answered:
-                password = password or keychain_password(lib.load_config())
+                if password is None:
+                    os.kill(pid, signal.SIGTERM)
+                    raise Stop('Le CLI demande le mot de passe du certificat, absent du Trousseau. Une fois : security add-generic-password -s '
+                               + lib.get(cfg, 'sign.keychain_service', 'cleanframe-signing') + ' -a ' + lib.get(cfg, 'sign.profile') + ' -w')
                 os.write(terminal, password + b'\n')
                 answered = asked
             if output.count(b'No: (N) ?') > refused:
@@ -82,7 +92,7 @@ def sdk_package(cfg, unsigned, outdir):
     os.waitpid(pid, 0)
     text = output.decode(errors='replace')
     if password:
-        text = text.replace(password.decode(), '[masqué]')
+        text = text.replace(password.decode(errors='replace'), '[masqué]')
     for line in text.strip().splitlines()[-12:]:
         log('  ' + line)
     if 'is created successfully' not in text and 'successfully' not in text.lower():
@@ -104,8 +114,11 @@ def certificates(signed):
 
 def end_date(b64):
     pem = '-----BEGIN CERTIFICATE-----\n' + b64 + '\n-----END CERTIFICATE-----\n'
-    out = subprocess.run(['openssl', 'x509', '-noout', '-enddate', '-subject'], input=pem, text=True, capture_output=True).stdout
+    result = subprocess.run(['openssl', 'x509', '-noout', '-enddate', '-subject'], input=pem, text=True, capture_output=True, timeout=30)
+    out = result.stdout
     match = re.search(r'notAfter=(.+)', out)
+    if result.returncode or not match:
+        raise Stop('Date d\'expiration du certificat illisible (openssl) : signature refusée par prudence.')
     when = datetime.strptime(match.group(1).strip().replace('  ', ' '), '%b %d %H:%M:%S %Y %Z').replace(tzinfo=timezone.utc) if match else None
     subject = (re.search(r'subject=\s*(.+)', out) or [None, ''])[1]
     return when, subject.strip()

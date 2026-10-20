@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import xml.etree.ElementTree as XML
 import zipfile
+from xml.sax.saxutils import escape
 
 import lib
 from lib import Stop, log
@@ -35,34 +36,50 @@ ALLOWED_PRIVILEGES = {
 URL_ALLOW = re.compile(r'https?://(?:www\.w3\.org|tizen\.org|samsung\.com/tv/metadata|cleanframe\.local)[^\s"\'<>)]*')
 
 # Fonctions CSS absentes de Chromium 76 (sources : MDN browser-compat-data, caniuse) que nous ne savons pas
-# convertir automatiquement : leur apparition en amont arrête la mise à jour.
+# convertir automatiquement : leur apparition en amont arrête la mise à jour. Les propriétés sont ancrées sur
+# une position de déclaration (après { ou ;) pour ne pas confondre avec un nom de classe ou une condition @media.
+DECL = r'(?:^|[;{])\s*'
 CSS_BLOCKERS = [
-    (r'(?<![\w-])aspect-ratio\s*:', 'aspect-ratio (Chrome 88)'),
-    (r'(?<![\w-])inset-(?:inline|block)(?:-start|-end)?\s*:', 'inset-inline/block (Chrome 87)'),
-    (r'[;{]\s*(?:translate|rotate|scale)\s*:', 'propriétés translate/rotate/scale (Chrome 104)'),
-    (r'(?<![\w-])accent-color\s*:', 'accent-color (Chrome 93)'),
-    (r'(?<![\w-])content-visibility\s*:', 'content-visibility (Chrome 85)'),
-    (r'overflow(?:-[xy])?\s*:\s*clip', 'overflow: clip (Chrome 90)'),
-    (r'(?<![\w-])container(?:-type|-name)?\s*:', 'container queries (Chrome 105)'),
-    (r'@container|@layer|@property|@supports\s+selector\(', 'règle @ récente'),
+    (DECL + r'aspect-ratio\s*:', 'aspect-ratio (Chrome 88)'),
+    (DECL + r'inset-(?:inline|block)(?:-start|-end)?\s*:', 'inset-inline/block (Chrome 87)'),
+    (DECL + r'(?:margin|padding|border|scroll-margin|scroll-padding)-(?:inline|block)(?:-start|-end)?(?:-\w+)?\s*:', 'propriétés logiques inline/block (Chrome 87)'),
+    (DECL + r'(?:translate|rotate|scale)\s*:', 'propriétés translate/rotate/scale (Chrome 104)'),
+    (DECL + r'accent-color\s*:', 'accent-color (Chrome 93)'),
+    (DECL + r'content-visibility\s*:', 'content-visibility (Chrome 85)'),
+    (DECL + r'overflow(?:-[xy])?\s*:\s*clip', 'overflow: clip (Chrome 90)'),
+    (DECL + r'container(?:-type|-name)?\s*:', 'container queries (Chrome 105)'),
+    (DECL + r'scrollbar-gutter\s*:', 'scrollbar-gutter (Chrome 94)'),
+    (DECL + r'text-(?:decoration-thickness|underline-offset)\s*:', 'text-decoration-thickness/underline-offset (Chrome 87)'),
+    (DECL + r'inset\s*:', 'inset (Chrome 87) non converti (valeur complexe)'),
+    (DECL + r'display\s*:\s*(?:inline|block)\s+(?:flex|grid|flow-root)', 'display à deux valeurs (Chrome 115)'),
+    (r'@container|@layer|@property|@scope|@starting-style|@supports\s+selector\(', 'règle @ récente'),
+    (r'@media[^{]*(?:[<>]=?|\(\s*(?:width|height)\s*[<>])', 'requête média par intervalle (Chrome 104)'),
     (r':(?:is|where|has)\(', 'sélecteur :is/:where/:has (Chrome 88+)'),
+    (r':not\([^)]*,', ':not() avec liste (Chrome 88) : règle entière ignorée'),
     (r'::marker', '::marker (Chrome 86)'),
     (r':focus-visible', ':focus-visible (Chrome 86)'),
-    (r'(?<![\w-])(?:clamp|min|max)\(', 'clamp()/min()/max() (Chrome 79)'),
-    (r'(?<![\w-])(?:color-mix|lab|lch|oklab|oklch|hwb)\(', 'couleurs CSS Color 4/5'),
+    (r'(?<![\w-])(?:clamp|min|max|round|mod|rem)\(', 'clamp()/min()/max()/round() (Chrome 79-125)'),
+    (r'(?<![\w-])(?:color-mix|lab|lch|oklab|oklch|hwb|light-dark)\(', 'couleurs CSS Color 4/5'),
+    (r'(?<![\w-])image-set\(', 'image-set() sans préfixe (Chrome 113)'),
     (r'\d(?:dvh|svh|lvh|dvw|svw|lvw|cqw|cqh|cqi|cqb)\b', 'unités viewport dynamiques / conteneur'),
-    (r'(?<![\w-])text-(?:decoration-thickness|underline-offset)\s*:', 'text-decoration-thickness/underline-offset (Chrome 87)'),
-    (r'(?<![\w-])scrollbar-gutter\s*:', 'scrollbar-gutter (Chrome 94)'),
-    (r'(?<![\w$-])inset\s*:', 'inset (Chrome 87) non converti'),
     (r'&\s*[.:#\[>~+]', 'imbrication CSS (Chrome 112)'),
+]
+# Dans une même règle, la version sans préfixe exige la version -webkit- (seule comprise par Chromium 76).
+CSS_PREFIX_NEEDED = [
+    (r'(?<![\w-])mask(?:-image|-size|-repeat|-position|-mode)?\s*:', r'-webkit-mask', 'mask sans -webkit-mask (Chrome 120)'),
+    (r'(?<![\w-])background-clip\s*:\s*text', r'-webkit-background-clip\s*:\s*text', 'background-clip:text sans préfixe (Chrome 120)'),
 ]
 # Ignorées sans effet visible majeur en Chromium 76 (polices optionnelles) : signalées, acceptées.
 CSS_ACCEPTED = [
-    (r'(?<![\w-])size-adjust\s*:', 'size-adjust (Chrome 92)'),
-    (r'(?<![\w-])(?:ascent|descent|line-gap)-override\s*:', '*-override (Chrome 87)'),
-    (r'(?<![\w-])font-synthesis\s*:', 'font-synthesis (Chrome 97)'),
-    (r'(?<![\w-])font-optical-sizing\s*:', 'font-optical-sizing (Chrome 79)'),
+    (DECL + r'size-adjust\s*:', 'size-adjust (Chrome 92)'),
+    (DECL + r'(?:ascent|descent|line-gap)-override\s*:', '*-override (Chrome 87)'),
+    (DECL + r'font-synthesis\s*:', 'font-synthesis (Chrome 97)'),
+    (DECL + r'font-optical-sizing\s*:', 'font-optical-sizing (Chrome 79)'),
 ]
+# Éléments de config.xml acceptés (ceux de l'auteur aujourd'hui). Tout autre élément (service, app-control,
+# catégorie de fond…) change la nature de l'app et arrête le build.
+CONFIG_ELEMENTS = {'{%s}%s' % (NS['w'], n) for n in ('name', 'icon', 'content', 'feature', 'description', 'author', 'license')} | \
+                  {'{%s}%s' % (NS['t'], n) for n in ('application', 'profile', 'privilege', 'setting', 'metadata')}
 # JavaScript : syntaxe et API absentes de V8 7.6 / Chromium 76. Le chargement réel dans Chromium 76
 # (ma-tv/harness) reste le juge final ; cette liste arrête tôt les cas connus.
 JS_BLOCKERS = [
@@ -103,21 +120,67 @@ def strip_css_comments(text):
     return re.sub(r'/\*.*?\*/', '', text, flags=re.S)
 
 
-def strip_js(text):
-    """Retire commentaires et chaînes (approximation suffisante pour du code ES5 lisible)."""
+REGEX_BEFORE = set('(,=:[!&|?{};+-*%<>~^') | {''}
+REGEX_KEYWORDS = {'return', 'typeof', 'case', 'do', 'else', 'in', 'of', 'new', 'delete', 'void', 'throw', 'instanceof', 'yield', 'await'}
+
+
+def strip_js(text, name='?'):
+    """Code JavaScript sans commentaires, chaînes ni littéraux regex (vidés), pour les barrières.
+
+    Reconnaît les regex d'après le jeton précédent (après un opérateur, une ponctuation ou un mot-clé comme
+    return). Si l'analyse se désynchronise (chaîne simple qui traverse une fin de ligne), le build s'arrête :
+    mieux vaut un faux arrêt qu'un code non inspecté.
+    """
     out, i, n = [], 0, len(text)
+    prev = ''  # dernier jeton significatif (caractère de ponctuation ou mot)
     while i < n:
         c = text[i]
+        if c in ' \t\r\n':
+            out.append(c); i += 1; continue
         if text.startswith('//', i):
             j = text.find('\n', i); i = n if j < 0 else j; continue
         if text.startswith('/*', i):
             j = text.find('*/', i + 2); i = n if j < 0 else j + 2; continue
-        if c in '\'"`':
+        if c in '\'"':
             j = i + 1
             while j < n and text[j] != c:
+                if text[j] == '\n':
+                    raise Stop(name + ' : analyse JS désynchronisée (chaîne ouverte ligne ' + str(text.count('\n', 0, i) + 1) + ').')
                 j += 2 if text[j] == '\\' else 1
-            out.append(c + c); i = j + 1; continue
+            out.append(c + c); i = j + 1; prev = 'x'; continue
+        if c == '`':
+            j = i + 1
+            while j < n and text[j] != '`':
+                if text.startswith('${', j):
+                    raise Stop(name + ' : gabarit `${…}` non analysé par les barrières (ligne ' + str(text.count('\n', 0, j) + 1) + ').')
+                j += 2 if text[j] == '\\' else 1
+            out.append('``'); i = j + 1; prev = 'x'; continue
+        if c == '/' and (prev in REGEX_BEFORE or prev in REGEX_KEYWORDS):
+            j, in_class = i + 1, False
+            while j < n:
+                ch = text[j]
+                if ch == '\\':
+                    j += 2; continue
+                if ch == '\n':
+                    raise Stop(name + ' : littéral regex non terminé ligne ' + str(text.count('\n', 0, i) + 1) + '.')
+                if ch == '[':
+                    in_class = True
+                elif ch == ']':
+                    in_class = False
+                elif ch == '/' and not in_class:
+                    break
+                j += 1
+            j += 1
+            while j < n and text[j].isalpha():
+                j += 1
+            out.append('/r/'); i = j; prev = 'x'; continue
+        m = re.match(r'[A-Za-z_$][\w$]*', text[i:i + 64])
+        if m:
+            out.append(m.group(0)); i += len(m.group(0)); prev = m.group(0); continue
         out.append(c); i += 1
+        prev = c if not c.isalnum() else 'x'
+        if c in ')]':
+            prev = 'x'  # après ) ou ], un / est une division
     return ''.join(out)
 
 
@@ -132,8 +195,15 @@ def gates(config_xml):
     extra = privileges - ALLOWED_PRIVILEGES
     if extra:
         errors.append('Nouveau(x) privilège(s) demandé(s) par l\'amont : ' + ', '.join(sorted(extra)))
-    if root.findall('w:access', NS) or root.findall('t:allow-navigation', NS) or root.findall('t:content-security-policy', NS):
-        errors.append('config.xml ouvre un accès réseau (<access>, allow-navigation ou CSP).')
+    unknown = sorted({child.tag for child in root} - CONFIG_ELEMENTS)
+    if unknown:
+        errors.append('config.xml : élément(s) non prévu(s) (accès réseau, service, app-control… ?) : ' + ', '.join(unknown))
+    content = root.find('w:content', NS)
+    if content is None or content.get('src') != 'index.html':
+        errors.append('config.xml : <content src> doit rester « index.html » (pas de page distante).')
+    for setting in root.findall('t:setting', NS):
+        if setting.get('background-support', 'disable') != 'disable':
+            errors.append('config.xml : background-support activé par l\'amont.')
     for path in sorted(APP.rglob('*')):
         name = path.relative_to(APP).as_posix()
         if not path.is_file() or not runtime_source(name) or path.suffix not in ('.js', '.html', '.css'):
@@ -142,17 +212,30 @@ def gates(config_xml):
         for url in re.findall(r'https?://[^\s"\'<>)]+', text):
             if not URL_ALLOW.match(url):
                 errors.append(name + ' : adresse réseau ' + url)
-        if path.suffix in ('.js', '.html') and NETWORK.search(strip_js(text) if path.suffix == '.js' else text):
-            errors.append(name + ' : appel réseau (' + NETWORK.search(strip_js(text) if path.suffix == '.js' else text).group(0) + ')')
+        if path.suffix == '.html':
+            if re.search(r'<script(?![^>]*\bsrc=)[^>]*>', text) or re.search(r'<style\b|\sstyle\s*=', text):
+                errors.append(name + ' : script ou style en ligne, non couvert par les barrières (à déplacer dans un fichier).')
+            if NETWORK.search(text):
+                errors.append(name + ' : appel réseau (' + NETWORK.search(text).group(0) + ')')
         if path.suffix == '.js':
-            code = strip_js(text)
+            try:
+                code = strip_js(text, name)
+            except Stop as stop:
+                errors.append(str(stop)); continue
+            if NETWORK.search(code):
+                errors.append(name + ' : appel réseau (' + NETWORK.search(code).group(0) + ')')
             for pattern, label in JS_BLOCKERS:
                 if re.search(pattern, code):
                     errors.append(name + ' : ' + label)
+            if re.search(r'(?<![\w-])mask-image', text) and '-webkit-mask-image' not in text:
+                errors.append(name + ' : mask-image sans -webkit-mask-image (icônes invisibles en Chromium 76)')
     return errors, warnings
 
 
 def expand_inset(match):
+    # Valeur avec fonction (calc, var, env…) : pas de découpage hasardeux, la barrière « inset non converti » arrêtera.
+    if '(' in match.group(2):
+        return match.group(0)
     values = match.group(2).split()
     important = match.group(3) or ''
     if not 1 <= len(values) <= 4:
@@ -165,8 +248,10 @@ def expand_inset(match):
 
 def adapt_css(text):
     """Conversions sûres pour Chromium 76 : `inset` → top/right/bottom/left ; `:focus-visible` → `:focus`
-    (pas de souris sur la TV : le focus vient toujours de la télécommande)."""
+    (pas de souris sur la TV : le focus vient toujours de la télécommande). Les commentaires sont retirés
+    d'abord, pour ne jamais réécrire leur texte."""
     count = {}
+    text = strip_css_comments(text)
     text, count['inset'] = re.subn(r'(^|[;{\s])inset\s*:\s*([^;}!]+?)\s*(!important)?\s*(?=[;}])', expand_inset, text)
     text, count[':focus-visible'] = re.subn(r':focus-visible', ':focus', text)
     return text, count
@@ -179,10 +264,43 @@ def css_findings(css_text, name):
         for m in re.finditer(pattern, clean):
             errors.append(name + ' : ' + label + ' → « ' + clean[max(0, m.start() - 30):m.end() + 20].strip() + ' »')
             break
+    for body in re.findall(r'\{([^{}]*)\}', clean):
+        for pattern, prefixed, label in CSS_PREFIX_NEEDED:
+            if re.search(pattern, body) and not re.search(prefixed, body):
+                errors.append(name + ' : ' + label + ' → « ' + body.strip()[:80] + ' »')
     for pattern, label in CSS_ACCEPTED:
         if re.search(pattern, clean):
             warnings.append(name + ' : ' + label + ' ignoré par Chromium 76 (accepté)')
     return errors, warnings
+
+
+def pseudo_gap_rules(css_texts, selectors):
+    """Pseudo-éléments ::before/::after dans le flux d'un conteneur flex à gap : le polyfill JS ne peut pas leur
+    donner de marge ; on génère la règle CSS équivalente, active seulement quand le polyfill l'est."""
+    rules, gaps = [], {}
+    for text in css_texts:
+        for m in re.finditer(r'([^{}@;]+)\{([^{}]*)\}', text):
+            body = m.group(2)
+            g = re.search(r'(?<![\w-])(?:column-)?gap\s*:\s*([\d.]+px)', body)
+            if g:
+                for sel in m.group(1).split(','):
+                    gaps[sel.strip()] = (g.group(1), 'column' in (re.search(r'flex-direction\s*:\s*([\w-]+)', body) or [None, ''])[1])
+    # Toutes les déclarations de chaque pseudo-élément, toutes règles confondues.
+    bodies = {}
+    for text in css_texts:
+        for m in re.finditer(r'([^{}@;]+)\{([^{}]*)\}', text):
+            for sel in m.group(1).split(','):
+                bodies.setdefault(sel.strip(), []).append(m.group(2))
+    for sel, parts in bodies.items():
+        host = re.match(r'^(.*?)::?(before|after)$', sel)
+        body = ';'.join(parts)
+        # Rendu seulement avec un content ; hors flux si absolu/fixe ou masqué.
+        if not host or host.group(1) not in gaps or 'content' not in body or re.search(r'position\s*:\s*(?:absolute|fixed)|display\s*:\s*none', body):
+            continue
+        gap, column = gaps[host.group(1)]
+        side = ('margin-top' if column else 'margin-left') if host.group(2) == 'after' else ('margin-bottom' if column else 'margin-right')
+        rules.append('html.cf-no-flexgap ' + sel + '{' + side + ':' + gap + '}')
+    return rules
 
 
 def gap_selectors(css_texts):
@@ -204,25 +322,33 @@ def gap_selectors(css_texts):
 
 def overlay_config(source, cfg, ident, required_version):
     """config.xml de l'auteur + identité propre à Alexis + version de plateforme Tizen 6.0."""
-    text = source
+    text = source.lstrip('﻿')
+    api = lib.get(cfg, 'api_version', '6.0')
+    attr = lambda v: escape(v, {'"': '&quot;'})
     replacements = [
-        (r'(<widget\b[^>]*\bid=")[^"]*(")', ident['widget_id']),
-        (r'(<tizen:application\b[^>]*\bid=")[^"]*(")', ident['app']),
-        (r'(<tizen:application\b[^>]*\bpackage=")[^"]*(")', ident['package']),
-        (r'(<tizen:application\b[^>]*\brequired_version=")[^"]*(")', required_version),
-        (r'(<name>)[^<]*(</name>)', ident['name']),
+        (r'(<widget\b[^>]*\bid=")[^"]*(")', attr(ident['widget_id'])),
+        (r'(<tizen:application\b[^>]*\bid=")[^"]*(")', attr(ident['app'])),
+        (r'(<tizen:application\b[^>]*\bpackage=")[^"]*(")', attr(ident['package'])),
+        (r'(<tizen:application\b[^>]*\brequired_version=")[^"]*(")', attr(required_version)),
+        (r'(<name>)[^<]*(</name>)', escape(ident['name'])),
     ]
     for pattern, value in replacements:
         text, n = re.subn(pattern, lambda m: m.group(1) + value + m.group(2), text, count=1)
         if n != 1:
             raise Stop('config.xml de l\'auteur a changé de forme (motif introuvable : ' + pattern + '). Adapter ma-tv/build.py.')
-    meta = '<tizen:metadata key="http://samsung.com/tv/metadata/devel.api.version" value="' + lib.get(cfg, 'api_version', '6.0') + '"/>'
-    if 'devel.api.version' not in text:
-        text = text.replace('</widget>', '  ' + meta + '\n</widget>')
-    root = XML.fromstring(text)
+    meta = r'(<tizen:metadata\b[^>]*key="http://samsung\.com/tv/metadata/devel\.api\.version"[^>]*\bvalue=")[^"]*(")'
+    text, n = re.subn(meta, lambda m: m.group(1) + attr(api) + m.group(2), text)
+    if n == 0:
+        text = text.replace('</widget>', '  <tizen:metadata key="http://samsung.com/tv/metadata/devel.api.version" value="' + attr(api) + '"/>\n</widget>')
+    try:
+        root = XML.fromstring(text)
+    except XML.ParseError as error:
+        raise Stop('config.xml généré illisible (' + str(error) + ').')
     app_node = root.find('t:application', NS)
-    if app_node.get('id') != ident['app'] or app_node.get('required_version') != required_version:
-        raise Stop('Vérification du config.xml généré en échec.')
+    metas = [m.get('value') for m in root.findall('t:metadata', NS) if m.get('key', '').endswith('devel.api.version')]
+    if (root.get('id') != ident['widget_id'] or app_node.get('id') != ident['app'] or app_node.get('package') != ident['package']
+            or app_node.get('required_version') != required_version or root.find('w:name', NS).text != ident['name'] or metas != [api]):
+        raise Stop('Vérification du config.xml généré en échec (identité, version de plateforme ou devel.api.version).')
     return text
 
 
@@ -249,11 +375,15 @@ def static_fonts(stage, warnings):
     faces = stage / 'assets/typefaces.css'
     text = faces.read_text()
     rule = re.search(r"@font-face\{font-family:'Study Geist';[^}]*\}", text)
-    if rule:
-        static = ''.join(re.sub(r"font-weight:[^;]+;", 'font-weight:%d;' % w,
-                                re.sub(r"src:url\([^)]*\)\s*format\([^)]*\)", "src:url('fonts/ma-tv-static/geist-%d.woff2') format('woff2')" % w, rule.group(0)))
-                         for w in (300, 400))
-        faces.write_text(text.replace(rule.group(0), static))
+    if not rule:
+        raise Stop('assets/typefaces.css de l\'auteur a changé (règle Study Geist introuvable). Adapter ma-tv/build.py.')
+    static = ''.join(re.sub(r"font-weight:[^;}]+", 'font-weight:%d' % w,
+                            re.sub(r"src:url\([^)]*\)\s*format\([^)]*\)", "src:url('fonts/ma-tv-static/geist-%d.woff2') format('woff2')" % w, rule.group(0)))
+                     for w in (300, 400))
+    text = text.replace(rule.group(0), static)
+    if 'geist-300.woff2' not in text or 'geist-400.woff2' not in text or 'Geist-Variable.ttf' in text:
+        raise Stop('Conversion de Geist en graisses fixes incomplète. Adapter ma-tv/build.py.')
+    faces.write_text(text)
     # Fichiers variables devenus inutiles (plus référencés) : retirés du paquet.
     css = ''.join(p.read_text() for p in stage.rglob('*.css'))
     for name in ('assets/manrope.woff2', 'assets/fonts/geist/Geist-Variable.ttf'):
@@ -280,8 +410,16 @@ def git_revision():
 
 
 def build(required_version=None, check_only=False, quiet=False):
+    """Construit le paquet. Toute erreur due à un changement de forme en amont devient un arrêt propre."""
+    try:
+        return _build(required_version, check_only, quiet)
+    except (OSError, XML.ParseError, TypeError, KeyError, ValueError, AttributeError) as error:
+        raise Stop('L\'amont a changé de forme (' + type(error).__name__ + ' : ' + str(error) + ') : adapter ma-tv/build.py.')
+
+
+def _build(required_version=None, check_only=False, quiet=False):
     cfg = lib.load_config()
-    ident = lib.identity(cfg)
+    ident = lib.identity(cfg, create=True)
     required_version = required_version or lib.get(cfg, 'required_version', '6.0')
     source_config = (APP / 'config.xml').read_text()
     errors, warnings = gates(source_config)
@@ -313,6 +451,11 @@ def build(required_version=None, check_only=False, quiet=False):
         e, w = css_findings(text, name)
         errors += e; warnings += w
     selectors = gap_selectors(css_texts)
+    pseudo = pseudo_gap_rules(css_texts, selectors)
+    if pseudo:
+        with open(STAGE / 'style.css', 'a') as css:
+            css.write('\n/* ma-tv : marges des pseudo-éléments flex (polyfill gap, Chromium 76) */\n' + '\n'.join(pseudo) + '\n')
+        conversions['style.css pseudo-éléments gap'] = len(pseudo)
     (STAGE / 'ma-tv-gap.js').write_text('/* Généré par ma-tv/build.py : règles CSS avec gap, pour compat-tizen6.js. */\n'
                                         'window.CleanFrameGapSelectors = ' + json.dumps(selectors) + ';\n')
     write_local_config(STAGE, cfg)
@@ -325,7 +468,8 @@ def build(required_version=None, check_only=False, quiet=False):
         shutil.copyfile(lib.ROOT / notice, STAGE / notice)
 
     version = XML.fromstring(source_config).get('version')
-    report = {'version': version, 'source': git_revision(), 'app_id': ident['app'], 'required_version': required_version,
+    commit = subprocess.run(['git', '-C', str(lib.ROOT), 'rev-parse', 'HEAD'], text=True, capture_output=True).stdout.strip()
+    report = {'version': version, 'source': git_revision(), 'commit': commit if not git_revision().endswith('+modifs') else None, 'app_id': ident['app'], 'required_version': required_version,
               'files': len(list(STAGE.rglob('*'))), 'css_conversions': conversions, 'gap_selectors': len(selectors),
               'errors': errors, 'warnings': warnings}
     if not quiet:

@@ -12,9 +12,11 @@ import os
 import re
 import secrets
 import shlex
+import signal
 import string
 import subprocess
 import sys
+import traceback
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +35,10 @@ ENV = {
 
 class Stop(Exception):
     """Arrêt volontaire et propre d'une étape (garde-fou), avec un message pour l'utilisateur."""
+
+
+class Cancelled(Stop):
+    """L'utilisateur a refusé une commande : ce n'est pas un échec (aucun retour arrière automatique)."""
 
 
 def merge(base, extra):
@@ -70,28 +76,39 @@ def load_config():
 
 
 def save_local(patch):
-    """Fusionne `patch` dans .local/ma-tv.json (fichier privé, droits 600)."""
+    """Fusionne `patch` dans .local/ma-tv.json (fichier privé, droits 600, écriture atomique)."""
     LOCAL.mkdir(exist_ok=True)
     current = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
-    CONFIG_FILE.write_text(json.dumps(merge(current, patch), indent=2, ensure_ascii=False) + '\n')
-    CONFIG_FILE.chmod(0o600)
+    temp = CONFIG_FILE.with_suffix('.tmp')
+    temp.write_text(json.dumps(merge(current, patch), indent=2, ensure_ascii=False) + '\n')
+    temp.chmod(0o600)
+    temp.replace(CONFIG_FILE)
 
 
-def identity(cfg):
-    """Identité de l'app propre à Alexis, générée une seule fois puis gardée stable.
+def identity(cfg, create=False):
+    """Identité de l'app propre à Alexis : lue, ou créée UNE fois (premier build, create=True).
 
     Le package ID suit la règle Tizen (10 caractères [0-9A-Za-z]). Ne jamais le changer après la première
-    installation : la TV verrait une autre app et les préférences seraient perdues.
+    installation : la TV verrait une autre app et les préférences seraient perdues. Si l'identité a disparu
+    alors qu'une version a déjà été signée ou installée, on s'arrête au lieu d'en inventer une autre.
     """
     ident = get(cfg, 'identity', {}) or {}
-    if not ident.get('package'):
-        alphabet = string.ascii_letters + string.digits
-        package = ''.join(secrets.choice(alphabet) for _ in range(10))
-        name = ident.get('name') or 'CleanFrame'
-        ident = {'package': package, 'app': package + '.' + re.sub(r'[^A-Za-z0-9]', '', name), 'name': name,
-                 'widget_id': 'http://cleanframe.local/' + package}
-        save_local({'identity': ident})
-        log('Nouvelle identité d\'app générée : ' + ident['app'] + ' (enregistrée dans .local/ma-tv.json)')
+    package, app = ident.get('package') or '', ident.get('app') or ''
+    if package and app:
+        if not re.fullmatch(r'[0-9A-Za-z]{10}', package) or not app.startswith(package + '.'):
+            raise Stop('Identité d\'app invalide dans .local/ma-tv.json (package « ' + package + ' », app « ' + app + ' »).')
+        return ident
+    already = get(cfg, 'sign.author_sha256') or list((LOCAL / 'releases').glob('*.wgt'))
+    if not create or already:
+        raise Stop('Identité d\'app absente de .local/ma-tv.json' + (' alors qu\'une version a déjà été signée/installée : '
+                   'restaurer .local/ma-tv.json depuis la sauvegarde (sinon la TV verrait une 2e app).' if already else '.'))
+    alphabet = string.ascii_letters + string.digits
+    package = ''.join(secrets.choice(alphabet) for _ in range(10))
+    name = ident.get('name') or 'CleanFrame'
+    ident = {'package': package, 'app': package + '.' + re.sub(r'[^A-Za-z0-9]', '', name), 'name': name,
+             'widget_id': 'http://cleanframe.local/' + package}
+    save_local({'identity': ident})
+    log('Nouvelle identité d\'app générée : ' + ident['app'] + ' (enregistrée dans .local/ma-tv.json)')
     return ident
 
 
@@ -109,26 +126,35 @@ def log(message):
         f.write(line + '\n')
 
 
-def run(command, timeout=120, check=True, show=True, secret=None, input_text=None):
-    """Lance une commande en l'affichant d'abord (« $ … »). `secret` est masqué dans l'affichage et le journal."""
+def run(command, timeout=120, check=True, show=True, secret=None, input_text=None, env=None, with_code=False):
+    """Lance une commande en l'affichant d'abord (« $ … »). `secret` est masqué dans l'affichage et le journal.
+
+    En cas de délai dépassé, tout le groupe de processus est tué (le CLI tizen lance un Java enfant).
+    with_code=True renvoie (code, sortie) au lieu de la sortie seule.
+    """
     shown = ' '.join(shlex.quote(str(c)) for c in command)
     if secret:
         shown = shown.replace(secret, '[masqué]')
     if show:
         log('$ ' + shown)
+    proc = subprocess.Popen([str(c) for c in command], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+                            env={**os.environ, **(env or {})}, start_new_session=True)
     try:
-        result = subprocess.run([str(c) for c in command], text=True, capture_output=True, timeout=timeout, input=input_text)
+        output, _ = proc.communicate(input_text, timeout=timeout)
     except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
         raise Stop('Délai dépassé (' + str(timeout) + ' s) : ' + shown)
-    output = (result.stdout or '') + (result.stderr or '')
+    output = output or ''
     if secret:
         output = output.replace(secret, '[masqué]')
     if show and output.strip():
         for line in output.rstrip().splitlines():
             log('  ' + line)
-    if check and result.returncode:
-        raise Stop('Commande en échec (code ' + str(result.returncode) + ') : ' + shown)
-    return output
+    if check and proc.returncode:
+        raise Stop('Commande en échec (code ' + str(proc.returncode) + ') : ' + shown)
+    return (proc.returncode, output) if with_code else output
 
 
 def sdk_tool(cfg, name):
@@ -158,9 +184,11 @@ def tv_api(cfg, timeout=5):
     log('$ GET ' + url)
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
-            return json.loads(response.read().decode())
-    except Exception as error:
-        raise Stop('La TV ne répond pas sur ' + url + ' (' + str(error) + '). Est-elle allumée, écran actif ?')
+            return json.loads(response.read().decode(), strict=False)  # la TV renvoie des sauts de ligne bruts
+    except OSError as error:
+        hint = ' Si Node/Python ne joignent pas la TV mais curl oui : autoriser « Réseau local » pour le terminal ' \
+               '(Réglages Système → Confidentialité et sécurité).' if 'route to host' in str(error) else ''
+        raise Stop('La TV ne répond pas sur ' + url + ' (' + str(error) + '). Est-elle allumée, écran actif ?' + hint)
 
 
 def mac_ip_towards(host):
@@ -173,7 +201,7 @@ def mac_ip_towards(host):
 
 
 def guard_tv(cfg, need_developer=True):
-    """Garde-fou avant toute commande qui touche la TV : bon modèle, bon appareil, mode développeur pointé sur ce Mac."""
+    """Garde-fou avant toute commande vers la TV : bon modèle, bon appareil, mode développeur pointé sur ce Mac."""
     info = tv_api(cfg)
     device = info.get('device', {})
     expected_model = get(cfg, 'tv.model')
@@ -184,22 +212,16 @@ def guard_tv(cfg, need_developer=True):
         raise Stop('Identifiant réseau de la TV différent de celui enregistré : autre appareil à cette adresse ?')
     if need_developer:
         if device.get('developerMode') != '1':
-            raise Stop('Le mode développeur de la TV est désactivé (Apps → Paramètres → 12345).')
-        mine = get(cfg, 'mac_ip') or mac_ip_towards(tv_host(cfg))
+            raise Stop('Le mode développeur de la TV est désactivé (Applications → 12345, voir ma-tv/docs/procedure.md).')
+        live, saved = mac_ip_towards(tv_host(cfg)), get(cfg, 'mac_ip')
+        if live and saved and live != saved:
+            raise Stop('L\'IP du Mac a changé (enregistrée ' + saved + ', actuelle ' + live + ') : mettre à jour "mac_ip" '
+                       'dans .local/ma-tv.json et « Host PC IP » sur la TV (12345), ou réserver l\'IP du Mac sur la box.')
+        mine = live or saved
         if device.get('developerIP') != mine:
             raise Stop('La TV attend le Mac ' + str(device.get('developerIP')) + ', or ce Mac est ' + str(mine)
-                       + '. Corriger « Host PC IP » sur la TV (12345) ou réserver l\'IP du Mac sur la box.')
+                       + ' : corriger « Host PC IP » sur la TV (Applications → 12345).')
     return device
-
-
-def confirm(cfg, what, args=None):
-    """Pause d'accord si --confirm a été demandé ; sinon simple annonce (mise à jour automatique)."""
-    if args is not None and getattr(args, 'confirm', False):
-        answer = input('→ ' + what + ' : continuer ? [o/N] ').strip().lower()
-        if answer not in ('o', 'oui', 'y', 'yes'):
-            raise Stop('Arrêt demandé avant : ' + what)
-    else:
-        log('→ ' + what)
 
 
 def main_guard(fn):
@@ -208,3 +230,9 @@ def main_guard(fn):
     except Stop as stop:
         log('ARRÊT : ' + str(stop))
         sys.exit(2)
+    except KeyboardInterrupt:
+        log('ARRÊT : interrompu (Ctrl-C).')
+        sys.exit(130)
+    except Exception:
+        log('ARRÊT INATTENDU (bug ou changement imprévu en amont) :\n' + traceback.format_exc())
+        sys.exit(3)
