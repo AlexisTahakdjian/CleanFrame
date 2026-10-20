@@ -29,6 +29,8 @@ import sign as signer
 from tv import TV
 
 C = {'LC_ALL': 'C', 'LANG': 'C'}  # sorties git en anglais, quelle que soit la langue du Mac
+# La branche porte le même nom que le dossier ma-tv/ : toujours la désigner sans ambiguïté.
+BRANCH = 'refs/heads/ma-tv'
 
 
 def git(*args, check=True, show=True, with_code=False):
@@ -41,7 +43,7 @@ def current_branch():
 
 
 def head(ref='HEAD'):
-    return git('rev-parse', ref, show=False).strip()
+    return git('rev-parse', '--verify', ref, show=False).strip()
 
 
 def preflight(cfg):
@@ -82,8 +84,8 @@ def leak_check(cfg, fork_ref):
         found += [name + ' contient « ' + s[:6] + '… »' for s in secrets if s in text]
         if PRIVATE_KEY.search(text):
             found.append(name + ' contient une clé privée')
-    span = (fork_ref + '..ma-tv') if fork_ref else 'ma-tv'
-    history = git('log', '-p', '--format=%B', span, show=False)
+    span = (fork_ref + '..' + BRANCH) if fork_ref else BRANCH
+    history = git('log', '-p', '--format=%B', span, '--', show=False)
     found += ['historique (' + span + ') contient « ' + s[:6] + '… »' for s in secrets if s in history]
     if PRIVATE_KEY.search(history):
         found.append('historique (' + span + ') contient une clé privée')
@@ -131,14 +133,14 @@ def update(args):
     preflight(cfg)
     upstream = lib.get(cfg, 'upstream.remote') + '/' + lib.get(cfg, 'upstream.branch')
     git('fetch', lib.get(cfg, 'upstream.remote'))
-    news = git('log', '--oneline', 'ma-tv..' + upstream, show=False).strip()
+    news = git('log', '--oneline', BRANCH + '..' + upstream, '--', show=False).strip()
     installed = lib.get(cfg, 'tv.installed_commit')
-    pending_install = installed != head('ma-tv')
+    pending_install = installed != head(BRANCH)
     if news:
         log('Nouveautés de l\'auteur :\n' + news)
-        git('diff', '--stat', 'ma-tv...' + upstream)
+        git('diff', '--stat', BRANCH + '...' + upstream, '--')
     elif pending_install:
-        log('ma-tv (' + head('ma-tv')[:8] + ') n\'est pas encore installée sur la TV (installée : ' + str(installed)[:8] + ') : installation.')
+        log('ma-tv (' + head(BRANCH)[:8] + ') n\'est pas encore installée sur la TV (installée : ' + str(installed)[:8] + ') : installation.')
     elif not args.rebuild:
         log('Rien de nouveau : la TV a déjà la dernière version. (--rebuild pour reconstruire et réinstaller.)')
         return
@@ -174,7 +176,7 @@ def update(args):
         git('merge', '--ff-only', temp)
         git('branch', '-d', temp)
     if not args.skip_tv:
-        lib.save_local({'tv': {'installed_commit': head('ma-tv')}})
+        lib.save_local({'tv': {'installed_commit': head(BRANCH)}})
     publish(cfg, args)
     log('Mise à jour terminée' + ('' if args.skip_tv else ' et installée') + '. Vérifier l\'écran de la TV.')
 
