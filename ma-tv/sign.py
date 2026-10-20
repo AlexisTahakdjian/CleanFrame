@@ -177,7 +177,13 @@ def sign(unsigned=None):
     shutil.copyfile(target, archived)
     info = {'wgt': target.name, 'sha256': digest, 'archive': archived.name, 'author_sha256': author, 'certificats': certs,
             'version': build_info['version'], 'app_id': build_info['app_id'], 'required_version': build_info['required_version']}
+    info['commit'] = build_info.get('commit')
     (lib.DIST / 'signed.json').write_text(json.dumps(info, indent=2, ensure_ascii=False) + '\n')
+    # Index des versions archivées : commit d'origine de chacune (pour savoir ce qui est installé).
+    index_file = releases / 'index.json'
+    index = json.loads(index_file.read_text()) if index_file.exists() else {}
+    index[archived.name] = {'commit': build_info.get('commit'), 'version': build_info['version'], 'required_version': build_info['required_version']}
+    index_file.write_text(json.dumps(index, indent=2) + '\n')
     log('Paquet signé : ' + str(target.relative_to(lib.ROOT)) + ' (archivé : .local/releases/' + archived.name + ')')
     return info
 

@@ -11,6 +11,10 @@ __pycache__/
 *.pem
 *.key
 *.csr
+# ma-tv : autres fichiers du profil de certificats Samsung
+*.pri
+*.crt
+device-profile.xml
 profiles.xml
 session.json
 certificate-password.txt

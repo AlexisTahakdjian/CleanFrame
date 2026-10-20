@@ -18,6 +18,7 @@ Usage : python3 ma-tv/update.py [--dry-run] [--rebuild] [--confirm] [--skip-tv] 
 Raccourci : ma-tv/maj
 """
 from datetime import datetime
+from pathlib import Path
 import argparse
 import re
 import subprocess
@@ -59,7 +60,7 @@ def preflight(cfg):
                    'la mise à jour automatique prend le relais ensuite.')
 
 
-SECRET_FILES = re.compile(r'\.(p12|pfx|pem|key|csr)$|(^|/)(profiles\.xml|certificate-password\.txt|ma-tv\.json)$', re.I)
+SECRET_FILES = re.compile(r'\.(p12|pfx|pem|key|csr|pri|crt)$|(^|/)(profiles\.xml|device-profile\.xml|certificate-password\.txt|ma-tv\.json)$', re.I)
 PRIVATE_KEY = re.compile(r'-----BEGIN [A-Z ]*PRIVATE KEY-----')
 
 
@@ -69,6 +70,10 @@ def leak_check(cfg, fork_ref):
     secrets = [s for s in [lib.get(cfg, 'tv.host'), lib.get(cfg, 'tv.udn'), lib.get(cfg, 'mac_ip'),
                            lib.get(cfg, 'tv.remote_token'), lib.get(cfg, 'identity.package'),
                            (lib.get(cfg, 'tv.capability', {}) or {}).get('duid')] if s]
+    profile_dir = Path.home() / 'SamsungCertificate' / str(lib.get(cfg, 'sign.profile'))
+    device_profile = profile_dir / 'device-profile.xml'
+    if device_profile.exists():  # DUID de la TV et autres valeurs du certificat distributeur
+        secrets += [v.strip() for v in re.findall(r'>([0-9A-Za-z+/=]{12,})<', device_profile.read_text())]
     found = []
     for name in [n for n in git('ls-files', '-z', show=False).split('\0') if n]:
         path = lib.ROOT / name

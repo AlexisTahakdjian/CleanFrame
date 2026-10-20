@@ -186,9 +186,10 @@ class TV:
         pending, last = lib.get(cfg, 'tv.pending_archive'), lib.get(cfg, 'tv.last_good_archive')
         if not pending or pending == last:
             return
-        build_info = json.loads((lib.DIST / 'build.json').read_text()) if (lib.DIST / 'build.json').exists() else {}
+        index = lib.LOCAL / 'releases' / 'index.json'
+        commit = (json.loads(index.read_text()) if index.exists() else {}).get(pending, {}).get('commit')
         lib.save_local({'tv': {'previous_good_archive': last, 'last_good_archive': pending, 'pending_archive': None,
-                               'installed_commit': build_info.get('commit')}})
+                               'installed_commit': commit}})
         log('Version validée : ' + pending)
 
     def debug(self):
@@ -235,7 +236,8 @@ class TV:
         cfg = lib.load_config()
         current = lib.get(cfg, 'tv.pending_archive') or lib.get(cfg, 'tv.last_good_archive')
         target = lib.get(cfg, 'tv.last_good_archive')
-        if target == current:
+        # Version validée déjà en place mais défaillante → la précédente ; app absente → la dernière validée.
+        if target == current and self.installed():
             target = lib.get(cfg, 'tv.previous_good_archive')
         if not target or not (lib.LOCAL / 'releases' / target).exists():
             raise Stop('Aucune version validée à réinstaller (.local/releases). Repli : Applications → Samsung Home reste utilisable.')
