@@ -11,7 +11,7 @@ Statuts : « mesuré sur la TV », « mesuré sur le Mac », « mesuré dans la 
 | **0 erreur console** | ✔ | Sur la TV : 0 erreur console ou réseau sur 2 séances de 3 rechargements de l'accueil (inspecteur). Recette : 0 erreur sur 189 vérifications dans 2 moteurs. Autres écrans sous inspecteur sur la TV (« All apps », réglages) : **non vérifié** |
 | **Accueil en moins de 2 s** | ✔ pour l'accueil utilisable · ✗ pour l'écran complet avec la photo | Accueil utilisable (horloge, apps, focus ; touches actives) : **0,52 à 0,65 s** (inspecteur). Chronomètre d'Alexis depuis Apps → CleanFrame : **1 à 2 s**, lancement de l'app compris. Écran complet avec la photo : **3,7 à 3,9 s** ✗. Avec un fond Dark ou Light : 0,72 à 0,78 s. Alexis a choisi de garder la photo |
 | **Touches de la télécommande** | ✔ | Flèches, OK, Retour, « All apps », Settings, « Leave Home? », « Samsung Home », lancement de YouTube, retour dans CleanFrame avec le focus conservé (§ 5) |
-| **Une commande pour mettre à jour** | ✔ (commande prête) · exécution complète **à faire** | `ma-tv/maj` enchaîne récupération, fusion, build, recette, anti-fuite, signature, installation, lancement, avance de `ma-tv` et push ([procédure](procedure.md#mettre-à-jour--ma-tvmaj)). `--dry-run` essayé. Chaque maillon a tourné séparément (build, recette, signature, `permit`, `install`, `launch`, mesuré). Une exécution réelle de bout en bout, avec une vraie nouveauté de l'auteur jusqu'à la TV, reste **à faire** ; le retour arrière automatique n'a pas été déclenché en réel (**non vérifié**) |
+| **Une commande pour mettre à jour** | ✔ **mesuré** (2026-10-21) | `ma-tv/maj` exécuté de bout en bout : build, recette 216/216 (0 erreur), anti-fuite, signature, `tizen install` (« install completed »), lancement, version validée, push sur le fork. Un second `ma-tv/maj --dry-run` répond « Rien de nouveau ». Non encore vécu : une vraie nouveauté de l'auteur (fusion) — non vérifié. |
 
 ## 2. Recette navigateur (Mac)
 
@@ -131,3 +131,13 @@ node ma-tv/harness/tv-inspect.mjs --port <port> --reloads 3            # → .lo
 ```
 
 Puis, hors inspecteur (TV redémarrée), le chronomètre depuis le bandeau Apps et la recette physique du § 6.
+
+## Langue et heure (2026-10-21)
+
+| Vérification | Résultat |
+|---|---|
+| Français et 24 h par défaut | ✔ mesuré (recette Chromium 76 et référence) |
+| Réglages → « Langue et heure » : passage à English / 12 h, coches, conservation après relance, retour au français | ✔ mesuré (recette) |
+| Aucun texte anglais visible en français (15 écrans) | ✔ mesuré (détecteur de la recette, 0 avertissement) |
+| Liste des Réglages à 7 groupes sans chevauchement | ✔ vérifié sur capture Chromium 76 |
+| Rendu sur la TV | à confirmer à la télécommande (non vérifié) |
