@@ -65,7 +65,8 @@ def leak_check(cfg, fork_ref):
     """Avant publication sur le fork public : aucune IP, aucun identifiant de TV/certificat, ni dans les fichiers
     suivis, ni dans l'historique et les messages des commits qui seront poussés."""
     secrets = [s for s in [lib.get(cfg, 'tv.host'), lib.get(cfg, 'tv.udn'), lib.get(cfg, 'mac_ip'),
-                           lib.get(cfg, 'tv.remote_token'), (lib.get(cfg, 'tv.capability', {}) or {}).get('duid')] if s]
+                           lib.get(cfg, 'tv.remote_token'), lib.get(cfg, 'identity.package'),
+                           (lib.get(cfg, 'tv.capability', {}) or {}).get('duid')] if s]
     found = []
     for name in [n for n in git('ls-files', '-z', show=False).split('\0') if n]:
         path = lib.ROOT / name
